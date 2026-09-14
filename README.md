@@ -1,4 +1,4 @@
-# Tumble (G16 node 3 - weapon + damage loop)
+# Tumble (G16 node 5 - destruction sound)
 
 Linux-native first-person 3D destruction game. Mission tree G16 builds a game
 node by node:
@@ -8,10 +8,13 @@ node by node:
 - node 2 - the destruction core: procedurally generated towers / buildings that
   shatter on demand into many independently simulated rigid-body blocks that
   bounce, roll and settle.
-- node 3 (this node) - the weapon and damage loop: a first-person hitscan
-  "pew-pew" weapon that shatters structures on hit, debris that damages the
-  player on contact (scaled by mass/speed), a health/death/restart flow, and a
-  HUD.
+- node 3 - the weapon and damage loop: a first-person hitscan "pew-pew" weapon
+  that shatters structures on hit, debris that damages the player on contact
+  (scaled by mass/speed), a health/death/restart flow, and a HUD.
+- node 5 (this node) - the destruction sound system: procedurally generated
+  deep, rumbly, resonant crash/explosion audio scaled to debris size and
+  variety, plus crisp high-pitched pew-pew weapon fire, wired to the real
+  shatter and fire events and verified by code-level spectral analysis.
 
 ## What the destruction core does (node 2)
 
@@ -50,6 +53,29 @@ node by node:
 The weapon and damage model are fully deterministic and scriptable: holding the
 "fire" action (or clicking) drives the exact same `fire()` code path, so the
 whole loop is testable without vision.
+
+## What node 5 adds
+
+- **Audio manager** (`scripts/audio/audio_manager.gd`, autoload singleton):
+  loads the generated WAVs straight off disk with `FileAccess` (no Godot import
+  step, no editor metadata to commit) and plays them from a small pooled set of
+  `AudioStreamPlayer`s. Exposes `play_pew()`, `play_crash(weight, variety)`
+  and `play_impact(mass)`.
+- **Destruction sound** (`audio/crash_small|medium|large|huge.wav`): four
+  procedurally synthesised crash/explosion tiers with real low-end weight
+  (sub-bass rumble, resonant partials, low-passed noise body, an impact
+  transient). A structure's shatter picks the tier and scales pitch/volume by
+  the total debris mass, and stacks extra layers when the block layout is more
+  varied -- bigger structures crash deeper, longer and heavier.
+- **Weapon fire** (`audio/pew_0|1|2.wav`): three crisp, high-pitched laser
+  "pew" variants (saw/square down-chirp plus a noise zap), one per shot, with
+  slight random pitch/volume variation. A small single-debris impact uses
+  `audio/impact.wav`, pitched and gained by the block's mass.
+- **Wiring**: the weapon's `fire()` triggers a pew on every shot and a
+  mass-scaled impact when it blasts loose debris; `DestructibleStructure.shatter()`
+  triggers a crash whose recorded weight is the true total debris mass and whose
+  variety is the number of distinct block size/shape combinations. No timers --
+  audio fires on the real shatter/fire code paths.
 
 ## Engine
 
@@ -97,17 +123,31 @@ Runs, in order:
    RigidBody3D blocks of varied sizes/shapes, every block gets non-zero random
    linear and angular velocity, gravity is 9.8 and blocks fall, and after 900
    frames all debris has settled with none falling through the ground plane.
-3. Weapon + damage loop test (`res://tests/WeaponDamageTest.tscn`) - asserts the
+3. Audio wiring test (`res://tests/AudioTest.tscn`) - headless (Dummy driver):
+   asserts all 8 generated WAVs load and decode to non-empty 16-bit PCM, the
+   pure size->sound mapping is monotonic (bigger = deeper + louder + more tiers
+   + more layers), firing triggers exactly one pew, shattering triggers exactly
+   one crash whose weight equals the true total debris mass, and firing at a
+   loose debris block triggers a mass-scaled impact.
+4. Audio spectral analysis (`tools/analyze_audio.py`) - pure-Python FFT over the
+   generated samples: crash/explosion files carry >= 30% of spectral energy
+   below 250 Hz (real low-end weight), pew files carry >= 30% above 1 kHz
+   (crisp high end), and crash tiers scale (longer + deeper as size grows).
+5. Weapon + damage loop test (`res://tests/WeaponDamageTest.tscn`) - asserts the
    node-3 completion contract headless, no vision: firing via input injection
    reduces ammo and shatters the aimed-at structure; a moving debris block
    colliding with the player reduces health (scaled by mass/speed); health at
    zero triggers death and respawn restores full health.
-4. Game-flow integration test (`res://tests/GameFlowTest.tscn`) - loads the real
+6. Game-flow integration test (`res://tests/GameFlowTest.tscn`) - loads the real
    game scene and verifies the HUD wiring, then lethal damage -> game-over
    overlay -> auto-respawn restores health and rebuilds structures.
-5. Rendered smoke test (`res://tests/SmokeTest.tscn`) - loads the real game
+7. Rendered smoke test (`res://tests/SmokeTest.tscn`) - loads the real game
    scene, drives the player, and verifies rendering via code-level pixel
    sampling (sky/ground/colour variation), using Xvfb when headless.
+
+Subjective audio quality (how the crashes feel and the pews read) is judged by
+the human playtester at node 7 -- the automated checks only prove the audio is
+non-silent, spectrally correct, and wired to the right events.
 
 ## Project layout
 
@@ -116,8 +156,12 @@ main.tscn                     root scene (loads scripts/main.gd)
 scripts/main.gd               environment, ground, props, player, destructibles, HUD, death/restart
 scripts/player.gd             first-person controller + weapon + health/damage/death
 scripts/player.tscn           player scene (capsule + camera)
-scripts/weapon/weapon.gd      hitscan "pew-pew" weapon (raycast, ammo, recoil, muzzle flash)
+scripts/weapon/weapon.gd      hitscan "pew-pew" weapon (raycast, ammo, recoil, muzzle flash, pew audio)
 scripts/damage/damage_zone.gd player hazard hitbox (debris -> damage)
+scripts/audio/audio_manager.gd  autoload sound system (loads WAVs, plays pew/crash/impact)
+audio/*.wav                   procedurally generated 16-bit mono 44.1 kHz samples
+tools/gen_audio.py            deterministic sample synthesis (reproduces audio/*.wav)
+tools/analyze_audio.py        FFT spectral analysis of the generated samples
 scripts/ui/hud.gd             health bar + ammo + game-over overlay
 scripts/destruction/structure_generator.gd     procedural block layout
 scripts/destruction/destructible_structure.gd  shatter to rigid-body debris
@@ -125,6 +169,7 @@ tests/stress_test.gd          250-body Jolt stress test
 tests/destruction_test.gd     destruction-core automated test
 tests/weapon_damage_test.gd   weapon + damage loop automated test
 tests/game_flow_test.gd       HUD + death/restart integration test
+tests/audio_test.gd           audio wiring + size->sound mapping test
 tests/smoke_test.gd           rendered first-person smoke test
 run.sh / test.sh / smoke_test.sh   one-command entry points
 tools/ensure_godot.sh         locates or downloads the Godot binary

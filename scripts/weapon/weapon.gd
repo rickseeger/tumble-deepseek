@@ -100,6 +100,7 @@ func fire() -> Dictionary:
 
 	_show_muzzle_flash()
 	_apply_recoil()
+	_audio_pew()
 
 	var hit := _raycast()
 	fired.emit(hit)
@@ -147,6 +148,7 @@ func _apply_hit(hit: Dictionary) -> void:
 		# Hit loose debris: blast it out of the way.
 		var dir := -_camera.global_transform.basis.z
 		collider.apply_central_impulse(dir * DEBRIS_IMPULSE)
+		_audio_impact(collider.mass)
 
 
 ## Walk up from the hit collider to the owning DestructibleStructure (the node
@@ -179,6 +181,24 @@ func _show_muzzle_flash() -> void:
 func _apply_recoil() -> void:
 	_recoil_velocity = RECOIL_KICK
 
+
+# --- node 5 audio hooks (no-op when the AudioManager autoload is absent) ---
+
+func _audio():
+	var root := get_tree().get_root()
+	if root == null:
+		return null
+	return root.get_node_or_null("AudioManager")
+
+func _audio_pew() -> void:
+	var a = _audio()
+	if a != null:
+		a.play_pew()
+
+func _audio_impact(mass: float) -> void:
+	var a = _audio()
+	if a != null:
+		a.play_impact(mass)
 
 func _build_muzzle_flash() -> void:
 	if _flash != null:

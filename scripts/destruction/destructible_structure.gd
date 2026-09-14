@@ -76,9 +76,37 @@ func shatter(impulse_origin: Vector3 = Vector3.INF, power: float = 1.0) -> Array
 		add_child(rb)
 		blocks.append(rb)
 
+	_trigger_destruction_audio()
 	shattered.emit(blocks)
 	return blocks
 
+
+# --- node 5 audio: crash/explosion scaled to debris size + variety ---
+
+func _audio_manager():
+	var root := get_tree().get_root()
+	if root == null:
+		return null
+	return root.get_node_or_null("AudioManager")
+
+func _trigger_destruction_audio() -> void:
+	var a = _audio_manager()
+	if a == null:
+		return
+	var weight := 0.0
+	for b in blocks:
+		weight += b.mass
+	a.play_crash(weight, _debris_variety())
+
+## Number of distinct block size/shape combinations in the layout -- the
+## "variety" that drives how many overlapping crash layers play.
+func _debris_variety() -> int:
+	var seen := {}
+	for spec in block_specs:
+		var sz: Vector3 = spec["size"]
+		var key := "%s|%.2f,%.2f,%.2f" % [spec["shape"], sz.x, sz.y, sz.z]
+		seen[key] = true
+	return seen.size()
 
 func _build_intact() -> void:
 	intact_body = StaticBody3D.new()
