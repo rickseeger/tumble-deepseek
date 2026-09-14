@@ -1,12 +1,19 @@
 extends Node3D
-## G16 node 1 scene builder: flat ground + a few static test objects +
-## the first-person player. Builds the scene in code so it is easy to
-## reason about and diff.
+## G16 scene builder: flat ground + props + destructible structures + the
+## first-person player. Node 3 wires the weapon/damage/death loop into this
+## scene: a HUD (health bar + ammo), death -> game-over overlay -> respawn, and
+## a keyboard fire path. Structures are destroyed by the weapon now (the old
+## debug "shatter all" key moved from F to T; F is the weapon trigger).
 
 const PLAYER_SCENE := "res://scripts/player.tscn"
 const DESTRUCTIBLE_SCRIPT := preload("res://scripts/destruction/destructible_structure.gd")
+const HUD_SCRIPT := preload("res://scripts/ui/hud.gd")
+
+const RESPAWN_DELAY := 2.0
 
 var _destructibles: Array = []
+var _player: CharacterBody3D = null
+var _hud: CanvasLayer = null
 
 
 func _ready() -> void:
@@ -15,6 +22,7 @@ func _ready() -> void:
 	_build_props()
 	_build_destructibles()
 	_build_player()
+	_build_hud()
 
 
 func _build_environment() -> void:
@@ -109,16 +117,6 @@ func _add_cylinder(pos: Vector3, radius: float, height: float, color: Color) -> 
 	add_child(body)
 
 
-func _build_player() -> void:
-	var packed := load(PLAYER_SCENE) as PackedScene
-	if packed == null:
-		push_error("player scene not found: " + PLAYER_SCENE)
-		return
-	var player := packed.instantiate()
-	player.name = "Player"
-	player.position = Vector3(0.0, 0.85, 0.0)
-	add_child(player)
-
 func _build_destructibles() -> void:
 	_add_destructible(Vector3(0.0, 0.0, -22.0), 4242)
 	_add_destructible(Vector3(11.0, 0.0, -30.0), 7777)
@@ -133,18 +131,74 @@ func _add_destructible(pos: Vector3, seed: int) -> void:
 	_destructibles.append(d)
 
 
+func _build_player() -> void:
+	var packed := load(PLAYER_SCENE) as PackedScene
+	if packed == null:
+		push_error("player scene not found: " + PLAYER_SCENE)
+		return
+	var player := packed.instantiate()
+	player.name = "Player"
+	player.position = Vector3(0.0, 0.85, 0.0)
+	add_child(player)
+	_player = player
+	_player.set_spawn_point(player.position)
+	_player.health_changed.connect(_on_health_changed)
+	_player.died.connect(_on_player_died)
+	if _player.weapon != null:
+		_player.weapon.ammo_changed.connect(_on_ammo_changed)
+
+
+func _build_hud() -> void:
+	_hud = HUD_SCRIPT.new()
+	_hud.name = "HUD"
+	add_child(_hud)
+	_on_health_changed(_player.health, _player.max_health)
+	if _player.weapon != null:
+		_on_ammo_changed(_player.weapon.ammo)
+
+
+func _on_health_changed(current: float, max_value: float) -> void:
+	if _hud != null:
+		_hud.set_health(current, max_value)
+
+
+func _on_ammo_changed(ammo: int) -> void:
+	if _hud != null:
+		_hud.set_ammo(ammo)
+
+
+func _on_player_died() -> void:
+	if _hud != null:
+		_hud.show_game_over()
+	var timer := get_tree().create_timer(RESPAWN_DELAY)
+	timer.timeout.connect(_respawn)
+
+
+func _respawn() -> void:
+	if _player == null:
+		return
+	_player.respawn()
+	_reset_destructibles()
+	if _hud != null:
+		_hud.hide_game_over()
+
+
 func _unhandled_input(event: InputEvent) -> void:
-	# Debug trigger keys so the destruction core can be exercised by hand:
-	#   F  -- shatter every intact destructible structure (weapon node will call
-	#         shatter() itself later; this is the stand-in trigger).
-	#   R  -- rebuild fresh structures.
+	# Debug keys for exercising the core by hand:
+	#   T  -- shatter every intact destructible structure (the weapon does this
+	#         per-structure now; T is the all-at-once debug stand-in).
+	#   R  -- rebuild fresh structures (and revive the player if dead).
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.physical_keycode == KEY_F:
+		if event.physical_keycode == KEY_T:
 			for d in _destructibles:
 				if not d.is_shattered:
 					d.shatter(d.global_position + Vector3(0.0, 2.0, 0.0), 1.1)
 		elif event.physical_keycode == KEY_R:
 			_reset_destructibles()
+			if _player != null and _player.is_dead:
+				_player.respawn()
+				if _hud != null:
+					_hud.hide_game_over()
 
 
 func _reset_destructibles() -> void:
@@ -152,4 +206,3 @@ func _reset_destructibles() -> void:
 		d.queue_free()
 	_destructibles.clear()
 	_build_destructibles()
-
