@@ -4,11 +4,16 @@ extends Node3D
 ## reason about and diff.
 
 const PLAYER_SCENE := "res://scripts/player.tscn"
+const DESTRUCTIBLE_SCRIPT := preload("res://scripts/destruction/destructible_structure.gd")
+
+var _destructibles: Array = []
+
 
 func _ready() -> void:
 	_build_environment()
 	_build_ground()
 	_build_props()
+	_build_destructibles()
 	_build_player()
 
 
@@ -113,4 +118,38 @@ func _build_player() -> void:
 	player.name = "Player"
 	player.position = Vector3(0.0, 0.85, 0.0)
 	add_child(player)
+
+func _build_destructibles() -> void:
+	_add_destructible(Vector3(0.0, 0.0, -22.0), 4242)
+	_add_destructible(Vector3(11.0, 0.0, -30.0), 7777)
+
+
+func _add_destructible(pos: Vector3, seed: int) -> void:
+	var d = DESTRUCTIBLE_SCRIPT.new()
+	d.name = "Destructible_%d" % _destructibles.size()
+	d.position = pos
+	add_child(d)
+	d.build_structure(Vector3.ZERO, seed)
+	_destructibles.append(d)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	# Debug trigger keys so the destruction core can be exercised by hand:
+	#   F  -- shatter every intact destructible structure (weapon node will call
+	#         shatter() itself later; this is the stand-in trigger).
+	#   R  -- rebuild fresh structures.
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.physical_keycode == KEY_F:
+			for d in _destructibles:
+				if not d.is_shattered:
+					d.shatter(d.global_position + Vector3(0.0, 2.0, 0.0), 1.1)
+		elif event.physical_keycode == KEY_R:
+			_reset_destructibles()
+
+
+func _reset_destructibles() -> void:
+	for d in _destructibles:
+		d.queue_free()
+	_destructibles.clear()
+	_build_destructibles()
 

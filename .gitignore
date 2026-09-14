@@ -5,7 +5,7 @@ export.cfg
 export_credentials.cfg
 
 # Local tooling (downloaded Godot binary, not committed)
-.godot-bin/
+.godot-bin
 *.zip
 
 # OS junk

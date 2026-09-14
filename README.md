@@ -1,32 +1,54 @@
-# Tumble (G16 node 1 — first-person 3D scaffold)
+# Tumble (G16 node 2 - destruction core)
 
-Linux-native first-person 3D game scaffold. This is node 1 of mission tree G16:
-a first-person destruction game. This node delivers the foundation only:
+Linux-native first-person 3D destruction game. Mission tree G16 builds a game
+node by node:
 
-- a real 3D engine project that builds and launches on Linux,
-- a ground-level first-person camera that moves forward through a 3D world
-  (mouse-look + WASD + jump),
-- a flat ground plane with a few static test objects,
-- proof that the physics engine steps 250 concurrently simulated rigid bodies
-  without collapse (this de-risks the destruction core for later nodes).
+- node 1 - first-person 3D scaffold: movement, camera, ground, a 250-body Jolt
+  physics stress test (proof the engine can handle the destruction load).
+- node 2 (this node) - the destruction core: procedurally generated towers /
+  buildings that shatter on demand into many independently simulated rigid-body
+  blocks that bounce, roll and settle.
 
-Deliberately **not** included yet (separate nodes): the shatter/destruction
-mechanic, the weapon, audio, procedural structures, difficulty ramp.
+## What the destruction core does
+
+- `StructureGenerator` procedurally builds a tower/building of varying
+  footprint, height, shape mix (box / cylinder / sphere) and per-block size,
+  deterministically for a given seed.
+- `DestructibleStructure` renders that layout as a single intact `StaticBody3D`,
+  then `shatter()` replaces it with one `RigidBody3D` per block - each given
+  randomized outward linear velocity, random angular spin, mass scaled to its
+  volume, and a friction/bounce physics material. They fall under real gravity
+  and bounce/roll/settle (continuous collision detection so fast small blocks
+  do not tunnel through the floor).
+
+### Hook for later nodes
+
+`scripts/destruction/destructible_structure.gd` exposes the contract the rest of
+the tree depends on:
+
+- `shatter(impulse_origin, power)` returns `Array[RigidBody3D]` - the
+  deterministic trigger node 3 (the weapon) will call.
+- `blocks: Array[RigidBody3D]` - the spawned debris list, for node 3 to detect
+  player-collision damage.
+- `block_specs: Array` - the generated layout (shape/size/color per block), so
+  node 5 can scale audio to debris variety.
+- `signal shattered(debris)` - emitted once, right after shatter.
+
+Preload the script directly
+(`preload("res://scripts/destruction/destructible_structure.gd")`) rather than
+relying on the global class cache.
 
 ## Engine
 
-- **Godot 4.7.2** (GDScript), GL Compatibility renderer (works on real GPUs and
-  on software Mesa/llvmpipe for headless CI).
-- **Jolt Physics** backend (built into Godot 4.4+, enabled via
-  `physics/3d/physics_engine = "Jolt Physics"`). Chosen because it comfortably
-  handles hundreds of concurrently simulated rigid bodies — the hardest
-  requirement of the full game — plus first-person control, positional audio,
-  and trivial Linux-native build/run.
+- Godot 4.7.2 (GDScript), GL Compatibility renderer (real GPUs and software
+  Mesa/llvmpipe for headless CI).
+- Jolt Physics backend (`physics/3d/physics_engine = "Jolt Physics"`), 60
+  ticks/s, gravity 9.8 - comfortably simulates hundreds of rigid bodies at once.
 
-## Build & run (single command)
+## Build and run (single command)
 
-Prerequisites: `git`, and either `curl` or `wget` (for the one-time Godot
-download). No system Godot install required.
+Prerequisites: `git`, and either `curl` or `wget` (one-time Godot download).
+No system Godot install required.
 
 ```sh
 git clone git@github.com:rickseeger/tumble-deepseek.git
@@ -34,15 +56,15 @@ cd tumble-deepseek
 ./run.sh
 ```
 
-`./run.sh` locates a `godot`/`godot4` on PATH, or downloads the official
-Godot 4.7.2 Linux build once into `.godot-bin/` (cached, not committed), then
-launches the game.
-
 Controls:
+
 - Mouse look (click to capture/release the pointer)
-- W/A/S/D or arrow keys — move
-- Space — jump
-- Esc — release mouse
+- W/A/S/D or arrow keys - move
+- Space - jump
+- Esc - release mouse
+- F - shatter every intact destructible structure (debug stand-in for the
+  node 3 weapon trigger)
+- R - rebuild fresh structures
 
 ## Automated verification
 
@@ -52,26 +74,32 @@ Controls:
 
 Runs, in order:
 
-1. **Physics stress test** (`godot --headless ... res://tests/StressTest.tscn`)
-   — spawns 250 rigid bodies above the ground and steps the simulation for 360
-   frames (6 s), then verifies none tunnel through the floor and the world is
-   still sane. Exit 0 on pass.
-2. **Rendered smoke test** (`./smoke_test.sh` → `res://tests/SmokeTest.tscn`)
-   — loads the real game scene, verifies the first-person camera sits at head
-   height, drives the player forward via the real input path, and confirms a
-   3D scene actually renders by sampling viewport pixels in code (sky blue at
-   top, ground green at bottom, colour variation) — no human vision involved.
-   Uses Xvfb automatically when there is no display.
+1. Physics stress test (`res://tests/StressTest.tscn`) - 250 rigid bodies stepped
+   for 360 frames, verifying none tunnel through the floor.
+2. Destruction-core test (`res://tests/DestructionTest.tscn`) - generates a
+   structure, triggers `shatter()`, dumps per-frame per-block state to a CSV
+   (`$G16_DUMP_PATH`, else `user://destruction_frames.csv`), and asserts
+   programmatically (no vision): Jolt is active, the intact structure is one
+   StaticBody3D that shatters into 30 or more independently simulated
+   RigidBody3D blocks of varied sizes/shapes, every block gets non-zero random
+   linear and angular velocity, gravity is 9.8 and blocks fall, and after 900
+   frames all debris has settled with none falling through the ground plane.
+3. Rendered smoke test (`res://tests/SmokeTest.tscn`) - loads the real game
+   scene, drives the player, and verifies rendering via code-level pixel
+   sampling (sky/ground/colour variation), using Xvfb when headless.
 
 ## Project layout
 
 ```
-main.tscn                root scene (loads scripts/main.gd)
-scripts/main.gd          builds environment, ground, props, player
-scripts/player.gd        first-person controller (CharacterBody3D)
-scripts/player.tscn      player scene (capsule + camera)
-tests/stress_test.gd     250-body Jolt stress test
-tests/smoke_test.gd      rendered first-person smoke test
+main.tscn                     root scene (loads scripts/main.gd)
+scripts/main.gd               environment, ground, props, player, destructibles + F/R debug keys
+scripts/player.gd             first-person controller (CharacterBody3D)
+scripts/player.tscn           player scene (capsule + camera)
+scripts/destruction/structure_generator.gd     procedural block layout
+scripts/destruction/destructible_structure.gd  shatter to rigid-body debris
+tests/stress_test.gd          250-body Jolt stress test
+tests/destruction_test.gd     destruction-core automated test
+tests/smoke_test.gd           rendered first-person smoke test
 run.sh / test.sh / smoke_test.sh   one-command entry points
-tools/ensure_godot.sh    locates or downloads the Godot binary
+tools/ensure_godot.sh         locates or downloads the Godot binary
 ```
