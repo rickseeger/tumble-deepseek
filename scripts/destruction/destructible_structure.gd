@@ -2,18 +2,22 @@ extends Node3D
 ## DestructibleStructure -- a procedurally generated tower/building that, on
 ## demand, shatters into many independently simulated RigidBody3D blocks.
 ##
-## Public API for downstream nodes (node 3 = weapon, node 5 = audio):
-##   build_structure(origin, seed)  -- generate and build the intact structure
+## Public API for downstream nodes (node 3 = weapon, node 5 = audio, node 4 =
+## level):
+##   build_structure(origin, seed, params) -- generate + build the intact
+##     structure. `params` (optional) carries node-4 difficulty scalars from
+##     DifficultyCurve.params_for(t): footprint_scale / height_scale /
+##     block_count_scale shape the layout; debris_speed_scale raises shatter
+##     launch speed (the "debris danger" knob).
 ##   shatter(impulse_origin, power) -- destroy it; returns the spawned debris
 ##   blocks: Array[RigidBody3D]     -- the spawned debris (populated by shatter)
 ##   block_specs: Array             -- the generated layout (shape/size/color per
 ##                                     block) so node 5 can scale audio to variety
 ##   is_shattered: bool             -- whether shatter() has already run
+##   structure_seed: int            -- the seed this structure was built from
+##   progress_t: float              -- level progress (0..1) at this structure
+##   debris_speed_scale: float      -- shatter launch-speed multiplier
 ##   signal shattered(debris)       -- emitted once, right after shatter
-##
-## Node 3 can either connect to `shattered` or simply call `shatter(...)` and
-## keep the returned Array. Node 5 can read `block_specs` (pre-shatter) or the
-## RigidBody3D list in `blocks` (post-shatter) to drive audio variety.
 
 const Generator := preload("res://scripts/destruction/structure_generator.gd")
 
@@ -24,20 +28,27 @@ var block_specs: Array = []
 var is_shattered := false
 var intact_body: StaticBody3D = null
 
+var structure_seed := -1
+var progress_t := 0.0
+var debris_speed_scale := 1.0
+
 var _origin := Vector3.ZERO
 var _seed := -1
 var _rng := RandomNumberGenerator.new()
 var _physics_material: PhysicsMaterial = null
 
 
-func build_structure(origin: Vector3 = Vector3.ZERO, seed: int = -1) -> void:
+func build_structure(origin: Vector3 = Vector3.ZERO, seed: int = -1, params: Dictionary = {}) -> void:
 	_origin = origin
 	_seed = seed
+	structure_seed = seed
+	progress_t = float(params.get("progress_t", 0.0))
+	debris_speed_scale = float(params.get("debris_speed_scale", 1.0))
 	if seed >= 0:
 		_rng.seed = seed
 	else:
 		_rng.randomize()
-	block_specs = Generator.generate(origin, _rng)
+	block_specs = Generator.generate(origin, _rng, params)
 	_physics_material = _make_physics_material()
 	_build_intact()
 
@@ -50,6 +61,11 @@ func shatter(impulse_origin: Vector3 = Vector3.INF, power: float = 1.0) -> Array
 	var center := impulse_origin
 	if center == Vector3.INF:
 		center = _origin + _bounds_center()
+	elif is_inside_tree():
+		# impulse_origin arrives in world space (from the weapon ray); block
+		# positions are local to this node, so convert so off-origin structures
+		# (the node-4 level places them beside the lane) explode correctly.
+		center = to_local(center)
 
 	if intact_body != null:
 		remove_child(intact_body)
@@ -64,7 +80,7 @@ func shatter(impulse_origin: Vector3 = Vector3.INF, power: float = 1.0) -> Array
 		if dir == Vector3.ZERO or dir.length() < 0.001:
 			dir = Vector3(_rng.randf_range(-1.0, 1.0), _rng.randf_range(0.2, 1.0), _rng.randf_range(-1.0, 1.0)).normalized()
 
-		var speed := _rng.randf_range(4.0, 12.0) * power
+		var speed := _rng.randf_range(4.0, 12.0) * power * debris_speed_scale
 		var up_boost := _rng.randf_range(1.5, 5.0)
 		rb.linear_velocity = dir * speed + Vector3.UP * up_boost
 		rb.angular_velocity = Vector3(

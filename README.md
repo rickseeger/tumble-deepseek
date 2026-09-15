@@ -1,4 +1,4 @@
-# Tumble (G16 node 5 - destruction sound)
+# Tumble (G16 node 4 - linear level + difficulty ramp)
 
 Linux-native first-person 3D destruction game. Mission tree G16 builds a game
 node by node:
@@ -11,7 +11,11 @@ node by node:
 - node 3 - the weapon and damage loop: a first-person hitscan "pew-pew" weapon
   that shatters structures on hit, debris that damages the player on contact
   (scaled by mass/speed), a health/death/restart flow, and a HUD.
-- node 5 (this node) - the destruction sound system: procedurally generated
+- node 4 (this node) - the linear level and difficulty ramp: a forward-
+  advancing stream of seeded structures whose density/size/height and debris
+  danger ramp up monotonically with progress, with a guaranteed clear lane so
+  the run stays winnable.
+- node 5 - the destruction sound system: procedurally generated
   deep, rumbly, resonant crash/explosion audio scaled to debris size and
   variety, plus crisp high-pitched pew-pew weapon fire, wired to the real
   shatter and fire events and verified by code-level spectral analysis.
@@ -53,6 +57,25 @@ node by node:
 The weapon and damage model are fully deterministic and scriptable: holding the
 "fire" action (or clicking) drives the exact same `fire()` code path, so the
 whole loop is testable without vision.
+
+## What node 4 adds
+
+- **Difficulty curve** (`scripts/level/difficulty_curve.gd`): every difficulty
+  scalar is a pure, monotonic function of progress `t` in `[0,1]` -- structure
+  spacing shrinks (density grows), footprint/height grow (bigger, taller
+  structures), and debris launch-speed / block-count multipliers grow (more,
+  faster, more dangerous debris). `params_for(t)` feeds the structure generator.
+- **Level generator** (`scripts/level/level_generator.gd`): a deterministic,
+  seedable layout running forward along -Z. Each record carries its progress,
+  the rolled difficulty params, and the measured footprint, and is placed so its
+  inner edge stays outside a guaranteed clear centre lane -- the player can
+  always advance, so the level is winnable start-to-finish.
+- **Streaming** (`scripts/level/level_manager.gd`): spawns structures as they
+  enter a window ahead of the player and despawns them once they fall behind,
+  keeping live physics bounded while the level feels continuous.
+- **Structure generator** now accepts the difficulty scalars (footprint/height/
+  block-count), and `DestructibleStructure.shatter()` applies `debris_speed_scale`
+  to the debris launch speed -- the "debris danger" knob.
 
 ## What node 5 adds
 
@@ -141,7 +164,14 @@ Runs, in order:
 6. Game-flow integration test (`res://tests/GameFlowTest.tscn`) - loads the real
    game scene and verifies the HUD wiring, then lethal damage -> game-over
    overlay -> auto-respawn restores health and rebuilds structures.
-7. Rendered smoke test (`res://tests/SmokeTest.tscn`) - loads the real game
+7. Level + difficulty-ramp test (`res://tests/LevelProgressionTest.tscn`) -
+   asserts (headless, no vision) that every difficulty scalar is monotonic in
+   progress, the generator is seedable/deterministic, per-record difficulty
+   params rise along the level, the clear lane is never violated, generated
+   block count / height / debris launch-speed grow with progress, and a seeded
+   full run of the real scene reaches the end without dying while structures
+   stream ahead and despawn behind.
+8. Rendered smoke test (`res://tests/SmokeTest.tscn`) - loads the real game
    scene, drives the player, and verifies rendering via code-level pixel
    sampling (sky/ground/colour variation), using Xvfb when headless.
 
@@ -164,11 +194,15 @@ tools/gen_audio.py            deterministic sample synthesis (reproduces audio/*
 tools/analyze_audio.py        FFT spectral analysis of the generated samples
 scripts/ui/hud.gd             health bar + ammo + game-over overlay
 scripts/destruction/structure_generator.gd     procedural block layout
+scripts/level/difficulty_curve.gd   pure monotonic difficulty ramp
+scripts/level/level_generator.gd    deterministic seeded level layout
+scripts/level/level_manager.gd      streams structures ahead / despawns behind
 scripts/destruction/destructible_structure.gd  shatter to rigid-body debris
 tests/stress_test.gd          250-body Jolt stress test
 tests/destruction_test.gd     destruction-core automated test
 tests/weapon_damage_test.gd   weapon + damage loop automated test
 tests/game_flow_test.gd       HUD + death/restart integration test
+tests/level_progression_test.gd  level + difficulty-ramp automated test
 tests/audio_test.gd           audio wiring + size->sound mapping test
 tests/smoke_test.gd           rendered first-person smoke test
 run.sh / test.sh / smoke_test.sh   one-command entry points

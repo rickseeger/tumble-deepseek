@@ -1,17 +1,24 @@
 extends Node3D
 ## G16 scene builder: flat ground + props + destructible structures + the
-## first-person player. Node 3 wires the weapon/damage/death loop into this
-## scene: a HUD (health bar + ammo), death -> game-over overlay -> respawn, and
-## a keyboard fire path. Structures are destroyed by the weapon now (the old
-## debug "shatter all" key moved from F to T; F is the weapon trigger).
+## first-person player. Node 4 replaces the two hard-coded structures with a
+## streaming linear level: the player advances forward (-Z) through a seeded,
+## generated sequence of structures whose density/size/height and debris danger
+## ramp up monotonically with progress (see scripts/level/). Structures stream
+## in ahead of the player and despawn behind, while a guaranteed clear centre
+## lane keeps the run winnable. The weapon/damage/death loop (node 3) and the
+## audio system (node 5) are unchanged.
 
 const PLAYER_SCENE := "res://scripts/player.tscn"
 const DESTRUCTIBLE_SCRIPT := preload("res://scripts/destruction/destructible_structure.gd")
 const HUD_SCRIPT := preload("res://scripts/ui/hud.gd")
+const LEVEL_MANAGER_SCRIPT := preload("res://scripts/level/level_manager.gd")
 
+const LEVEL_SEED := 20260915
+const LEVEL_LENGTH := 200.0
 const RESPAWN_DELAY := 2.0
 
 var _destructibles: Array = []
+var _level = null
 var _player: CharacterBody3D = null
 var _hud: CanvasLayer = null
 
@@ -20,9 +27,16 @@ func _ready() -> void:
 	_build_environment()
 	_build_ground()
 	_build_props()
-	_build_destructibles()
+	_build_level()
 	_build_player()
 	_build_hud()
+
+
+func _process(_delta: float) -> void:
+	# Forward-advance loop: stream structures ahead of the player and despawn
+	# them once they fall behind.
+	if _player != null and _level != null:
+		_level.update(_player.position.z)
 
 
 func _build_environment() -> void:
@@ -48,16 +62,17 @@ func _build_ground() -> void:
 	var ground := StaticBody3D.new()
 	ground.name = "Ground"
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(200.0, 2.0, 200.0)
+	shape.size = Vector3(400.0, 2.0, 600.0)
 	var col := CollisionShape3D.new()
 	col.shape = shape
-	col.position = Vector3(0.0, -1.0, 0.0)
+	col.position = Vector3(0.0, -1.0, -150.0)
 	ground.add_child(col)
 
 	var mesh := PlaneMesh.new()
-	mesh.size = Vector2(200.0, 200.0)
+	mesh.size = Vector2(400.0, 600.0)
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
+	mi.position = Vector3(0.0, 0.0, -150.0)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.36, 0.47, 0.30, 1.0)
 	mat.roughness = 1.0
@@ -67,11 +82,13 @@ func _build_ground() -> void:
 
 
 func _build_props() -> void:
-	_add_box(Vector3(0.0, 1.0, -12.0), Vector3(2.0, 2.0, 2.0), Color(0.78, 0.33, 0.24))
-	_add_box(Vector3(4.0, 0.75, -16.0), Vector3(1.5, 1.5, 1.5), Color(0.85, 0.66, 0.20))
-	_add_box(Vector3(-3.5, 1.5, -20.0), Vector3(1.5, 3.0, 1.5), Color(0.27, 0.45, 0.72))
-	_add_box(Vector3(1.5, 0.5, -26.0), Vector3(1.0, 1.0, 1.0), Color(0.55, 0.55, 0.55))
-	_add_cylinder(Vector3(-6.0, 1.0, -14.0), 1.0, 2.0, Color(0.70, 0.50, 0.80))
+	# Decorative props, all kept OUTSIDE the clear forward lane (|x| >= 4) so
+	# they never block the player's advance.
+	_add_box(Vector3(6.0, 1.0, -12.0), Vector3(2.0, 2.0, 2.0), Color(0.78, 0.33, 0.24))
+	_add_box(Vector3(-6.0, 0.75, -16.0), Vector3(1.5, 1.5, 1.5), Color(0.85, 0.66, 0.20))
+	_add_box(Vector3(5.5, 1.5, -20.0), Vector3(1.5, 3.0, 1.5), Color(0.27, 0.45, 0.72))
+	_add_box(Vector3(-5.0, 0.5, -26.0), Vector3(1.0, 1.0, 1.0), Color(0.55, 0.55, 0.55))
+	_add_cylinder(Vector3(-7.0, 1.0, -14.0), 1.0, 2.0, Color(0.70, 0.50, 0.80))
 
 
 func _add_box(pos: Vector3, size: Vector3, color: Color) -> void:
@@ -117,18 +134,13 @@ func _add_cylinder(pos: Vector3, radius: float, height: float, color: Color) -> 
 	add_child(body)
 
 
-func _build_destructibles() -> void:
-	_add_destructible(Vector3(0.0, 0.0, -22.0), 4242)
-	_add_destructible(Vector3(11.0, 0.0, -30.0), 7777)
-
-
-func _add_destructible(pos: Vector3, seed: int) -> void:
-	var d = DESTRUCTIBLE_SCRIPT.new()
-	d.name = "Destructible_%d" % _destructibles.size()
-	d.position = pos
-	add_child(d)
-	d.build_structure(Vector3.ZERO, seed)
-	_destructibles.append(d)
+func _build_level() -> void:
+	_level = LEVEL_MANAGER_SCRIPT.new()
+	_level.name = "LevelManager"
+	add_child(_level)
+	_destructibles = _level.structures  # alias so tests/debug keys see live structures
+	_level.configure(LEVEL_SEED, LEVEL_LENGTH)
+	_level.update(0.0)
 
 
 func _build_player() -> void:
@@ -202,7 +214,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _reset_destructibles() -> void:
-	for d in _destructibles:
-		d.queue_free()
-	_destructibles.clear()
-	_build_destructibles()
+	if _level == null:
+		_build_level()
+		return
+	_level.reset(LEVEL_SEED, LEVEL_LENGTH)
+	_level.update(_player.position.z if _player != null else 0.0)
