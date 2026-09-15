@@ -1,4 +1,4 @@
-# Tumble (G16 node 4 - linear level + difficulty ramp)
+# Tumble (G16 node 6 - integrated full game loop)
 
 Linux-native first-person 3D destruction game. Mission tree G16 builds a game
 node by node:
@@ -11,7 +11,7 @@ node by node:
 - node 3 - the weapon and damage loop: a first-person hitscan "pew-pew" weapon
   that shatters structures on hit, debris that damages the player on contact
   (scaled by mass/speed), a health/death/restart flow, and a HUD.
-- node 4 (this node) - the linear level and difficulty ramp: a forward-
+- node 4 - the linear level and difficulty ramp: a forward-
   advancing stream of seeded structures whose density/size/height and debris
   danger ramp up monotonically with progress, with a guaranteed clear lane so
   the run stays winnable.
@@ -19,6 +19,11 @@ node by node:
   deep, rumbly, resonant crash/explosion audio scaled to debris size and
   variety, plus crisp high-pitched pew-pew weapon fire, wired to the real
   shatter and fire events and verified by code-level spectral analysis.
+- node 6 (this node) - the integration/hardening pass: the whole loop is wired
+  into one coherent, playable game with a start screen, a win condition, and a
+  restart flow, plus a headless full-loop test that drives the complete
+  start -> move -> shoot -> shatter -> debris -> damage -> ramp -> sound ->
+  win -> restart sequence end-to-end.
 
 ## What the destruction core does (node 2)
 
@@ -100,6 +105,29 @@ whole loop is testable without vision.
   variety is the number of distinct block size/shape combinations. No timers --
   audio fires on the real shatter/fire code paths.
 
+## What node 6 adds (integration / hardening)
+
+- **Game-state machine** (`scripts/main.gd`): the game boots into a title/start
+  screen (`BOOT`), plays (`PLAYING`), dies with a game-over overlay and an
+  automatic restart after 2 s (`DEAD`, or press Enter to restart immediately),
+  and wins on reaching the far end of the level (`WON`). `start_game()` is the
+  single public entry point that resets the player and the level and clears
+  every overlay, so a test can drive the exact same transitions the input
+  handler uses.
+- **Start / win / restart flow**: Enter (or a click) starts from the title
+  screen; Enter on the victory screen starts a fresh run. Death restarts the
+  run from the beginning (roguelike: lose your progress). Esc releases the
+  mouse pointer.
+- **Victory screen** (`scripts/ui/hud.gd`): a "LEVEL CLEARED" overlay with a
+  play-again prompt, reached by surviving to z = -200 with the difficulty ramp
+  at full tilt.
+- **Full-loop integration test** (`tests/full_loop_test.gd`): a headless,
+  no-vision run of the real game scene that starts the game, drives the player
+  the whole level to the win, restarts, then shoots a structure to shatter it
+  into rigid-body debris (asserting the pew/crash audio counters), and finally
+  fires a debris block at the player to prove the damage leg — then exits
+  cleanly with code 0.
+
 ## Engine
 
 - Godot 4.7.2 (GDScript), GL Compatibility renderer (real GPUs and software
@@ -120,13 +148,13 @@ cd tumble-deepseek
 
 Controls:
 
-- Mouse look (click to capture/release the pointer)
+- Enter (or click) - start the game / play again / skip the respawn wait
+- Mouse look (click to capture the pointer; Esc releases it)
 - Left click (captured) or F - fire the weapon
 - W/A/S/D or arrow keys - move
 - Space - jump
-- Esc - release mouse
 - T - shatter every intact structure at once (debug stand-in)
-- R - rebuild fresh structures (and revive the player if dead)
+- R - restart the run from the beginning
 
 ## Automated verification
 
@@ -171,9 +199,16 @@ Runs, in order:
    block count / height / debris launch-speed grow with progress, and a seeded
    full run of the real scene reaches the end without dying while structures
    stream ahead and despawn behind.
-8. Rendered smoke test (`res://tests/SmokeTest.tscn`) - loads the real game
-   scene, drives the player, and verifies rendering via code-level pixel
-   sampling (sky/ground/colour variation), using Xvfb when headless.
+8. Full-loop integration test (`res://tests/FullLoopTest.tscn`) - the node-6
+   contract, headless and vision-free: boots the real game scene into the start
+   screen, starts the game, drives the player the full level to the win,
+   restarts, shoots a structure to shatter it into rigid-body debris (asserting
+   the pew/crash audio counters fire exactly once each), fires a debris block at
+   the player to prove damage, and exits cleanly with code 0.
+9. Rendered smoke test (`res://tests/SmokeTest.tscn`) - loads the real game
+   scene, starts the run, drives the player, and verifies rendering via
+   code-level pixel sampling (sky/ground/colour variation), using Xvfb when
+   headless.
 
 Subjective audio quality (how the crashes feel and the pews read) is judged by
 the human playtester at node 7 -- the automated checks only prove the audio is

@@ -1,12 +1,21 @@
 extends Node3D
-## G16 scene builder: flat ground + props + destructible structures + the
-## first-person player. Node 4 replaces the two hard-coded structures with a
-## streaming linear level: the player advances forward (-Z) through a seeded,
-## generated sequence of structures whose density/size/height and debris danger
-## ramp up monotonically with progress (see scripts/level/). Structures stream
-## in ahead of the player and despawn behind, while a guaranteed clear centre
-## lane keeps the run winnable. The weapon/damage/death loop (node 3) and the
-## audio system (node 5) are unchanged.
+## G16 scene builder + game-state machine (node 6 integration / hardening).
+##
+## Wires the full loop into one coherent, playable first-person game:
+##   * BOOT    -> title/start screen ("Press ENTER to start").
+##   * PLAYING -> move/drive forward through the streaming linear level, shoot
+##                structures (they shatter into debris), dodge flying debris
+##                (blocks that hit you deal damage), while difficulty ramps and
+##                sound fires.
+##   * DEAD    -> game-over overlay, then an automatic restart after a short
+##                delay (or press ENTER to restart immediately). Death restarts
+##                the run from the beginning (roguelike: lose your progress).
+##   * WON     -> reach the far end of the level: victory overlay, ENTER to play
+##                again.
+##
+## The state machine is plain data (`state`) plus public `start_game()` /
+## `_win()` entry points, so the headless full-loop test drives the exact same
+## transitions the input handler uses, with no vision.
 
 const PLAYER_SCENE := "res://scripts/player.tscn"
 const DESTRUCTIBLE_SCRIPT := preload("res://scripts/destruction/destructible_structure.gd")
@@ -17,10 +26,18 @@ const LEVEL_SEED := 20260915
 const LEVEL_LENGTH := 200.0
 const RESPAWN_DELAY := 2.0
 
+enum GameState { BOOT, PLAYING, DEAD, WON }
+
+signal game_started
+signal game_won
+
+var state: int = GameState.BOOT
+
 var _destructibles: Array = []
 var _level = null
 var _player: CharacterBody3D = null
 var _hud: CanvasLayer = null
+var _respawn_timer: SceneTreeTimer = null
 
 
 func _ready() -> void:
@@ -30,6 +47,7 @@ func _ready() -> void:
 	_build_level()
 	_build_player()
 	_build_hud()
+	_enter_boot()
 
 
 func _process(_delta: float) -> void:
@@ -37,6 +55,95 @@ func _process(_delta: float) -> void:
 	# them once they fall behind.
 	if _player != null and _level != null:
 		_level.update(_player.position.z)
+	# Win condition: reaching the far end of the level clears it.
+	if state == GameState.PLAYING and _player != null and _level != null \
+			and _player.position.z <= -float(_level.length):
+		_win()
+
+
+# --- game-state transitions -------------------------------------------------
+
+func _enter_boot() -> void:
+	state = GameState.BOOT
+	if _hud != null:
+		_hud.show_start_screen()
+	_set_mouse_visible()
+
+
+## Start (or restart) a fresh run: revive/teleport the player to spawn, rebuild
+## the level, clear every overlay, and begin play.
+func start_game() -> void:
+	if _player != null:
+		_player.respawn()
+	_reset_destructibles()
+	if _hud != null:
+		_hud.hide_game_over()
+		_hud.hide_win_screen()
+		_hud.hide_start_screen()
+	state = GameState.PLAYING
+	_set_mouse_captured()
+	game_started.emit()
+
+
+func _on_player_died() -> void:
+	state = GameState.DEAD
+	if _hud != null:
+		_hud.show_game_over()
+	_respawn_timer = get_tree().create_timer(RESPAWN_DELAY)
+	_respawn_timer.timeout.connect(_respawn)
+
+
+func _respawn() -> void:
+	if state != GameState.DEAD:
+		return
+	start_game()
+
+
+func _win() -> void:
+	if state != GameState.PLAYING:
+		return
+	state = GameState.WON
+	if _hud != null:
+		_hud.show_win_screen()
+	_set_mouse_visible()
+	game_won.emit()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	# Start / restart / debug keys.
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.physical_keycode == KEY_ENTER or event.physical_keycode == KEY_KP_ENTER:
+			if state == GameState.BOOT or state == GameState.WON:
+				start_game()
+			elif state == GameState.DEAD:
+				_respawn()
+			return
+		elif event.physical_keycode == KEY_ESCAPE:
+			# Release the pointer so the player can reach the OS cursor.
+			_set_mouse_visible()
+			return
+		elif event.physical_keycode == KEY_T:
+			# Debug: shatter every intact structure at once.
+			for d in _destructibles:
+				if not d.is_shattered:
+					d.shatter(d.global_position + Vector3(0.0, 2.0, 0.0), 1.1)
+		elif event.physical_keycode == KEY_R:
+			# Debug: full restart.
+			start_game()
+	elif event is InputEventMouseButton and event.pressed \
+			and event.button_index == MOUSE_BUTTON_LEFT:
+		if state == GameState.BOOT or state == GameState.WON:
+			start_game()
+
+
+func _set_mouse_captured() -> void:
+	if DisplayServer.get_name() != "headless":
+		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+
+func _set_mouse_visible() -> void:
+	if DisplayServer.get_name() != "headless":
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 
 
 func _build_environment() -> void:
@@ -177,40 +284,6 @@ func _on_health_changed(current: float, max_value: float) -> void:
 func _on_ammo_changed(ammo: int) -> void:
 	if _hud != null:
 		_hud.set_ammo(ammo)
-
-
-func _on_player_died() -> void:
-	if _hud != null:
-		_hud.show_game_over()
-	var timer := get_tree().create_timer(RESPAWN_DELAY)
-	timer.timeout.connect(_respawn)
-
-
-func _respawn() -> void:
-	if _player == null:
-		return
-	_player.respawn()
-	_reset_destructibles()
-	if _hud != null:
-		_hud.hide_game_over()
-
-
-func _unhandled_input(event: InputEvent) -> void:
-	# Debug keys for exercising the core by hand:
-	#   T  -- shatter every intact destructible structure (the weapon does this
-	#         per-structure now; T is the all-at-once debug stand-in).
-	#   R  -- rebuild fresh structures (and revive the player if dead).
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.physical_keycode == KEY_T:
-			for d in _destructibles:
-				if not d.is_shattered:
-					d.shatter(d.global_position + Vector3(0.0, 2.0, 0.0), 1.1)
-		elif event.physical_keycode == KEY_R:
-			_reset_destructibles()
-			if _player != null and _player.is_dead:
-				_player.respawn()
-				if _hud != null:
-					_hud.hide_game_over()
 
 
 func _reset_destructibles() -> void:

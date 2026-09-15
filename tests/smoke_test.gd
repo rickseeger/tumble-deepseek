@@ -54,6 +54,12 @@ func _run() -> void:
 		_check(absf(camera.global_position.y - HEAD_HEIGHT) < 0.05,
 			"camera at head height (%.2f m)" % camera.global_position.y)
 
+	# node 6: begin the run so the title/start screen does not cover the frame
+	# we pixel-sample below.
+	if main.has_method("start_game"):
+		main.start_game()
+	await get_tree().process_frame
+
 	var start: Vector3 = player.global_position
 	Input.action_press("move_forward")
 	for i in range(30):

@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Tumble"
-config/description="First-person 3D destruction game — G16 node 4 (linear level + difficulty ramp: seeded forward-advancing stream of structures whose density/size/height and debris danger scale monotonically with progress; node 5 adds the destruction sound)."
+config/description="Tumble — G16 node 6 (integration/hardening): a coherent first-person 3D destruction game with a full loop — start screen, drive forward through a streaming linear level, shoot structures into debris, dodge flying debris, take damage, difficulty ramp, destruction sound, win + restart flow. One command: ./run.sh."
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.4", "GL Compatibility")
 config/icon="res://icon.svg"
