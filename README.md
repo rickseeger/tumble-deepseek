@@ -159,8 +159,9 @@ Controls:
 ## Automated verification
 
 ```sh
-./test.sh
+./run_tests.sh
 ```
+(`test.sh` is a backward-compatible alias for the same suite.)
 
 Runs, in order:
 
@@ -174,6 +175,10 @@ Runs, in order:
    RigidBody3D blocks of varied sizes/shapes, every block gets non-zero random
    linear and angular velocity, gravity is 9.8 and blocks fall, and after 900
    frames all debris has settled with none falling through the ground plane.
+   It also asserts the two physics contracts explicitly: a freely released
+   block accelerates downward (vertical velocity becomes more negative under
+   9.8 m/s^2 gravity), and a moving block's speed decays over time via
+   velocity damping (no tunneling throughout).
 3. Audio wiring test (`res://tests/AudioTest.tscn`) - headless (Dummy driver):
    asserts all 8 generated WAVs load and decode to non-empty 16-bit PCM, the
    pure size->sound mapping is monotonic (bigger = deeper + louder + more tiers
@@ -189,23 +194,29 @@ Runs, in order:
    reduces ammo and shatters the aimed-at structure; a moving debris block
    colliding with the player reduces health (scaled by mass/speed); health at
    zero triggers death and respawn restores full health.
-6. Game-flow integration test (`res://tests/GameFlowTest.tscn`) - loads the real
+6. Weapon determinism test (`res://tests/WeaponDeterminismTest.tscn`) - asserts
+   the node-8 contract (5): the hitscan weapon is deterministic for identical
+   inputs. Two identically-seeded structures aimed by two identically-aimed
+   cameras yield identical local hit points, hit normals, and ammo
+   consumption, and the underlying physics ray query returns an identical
+   hit for two back-to-back identical queries.
+7. Game-flow integration test (`res://tests/GameFlowTest.tscn`) - loads the real
    game scene and verifies the HUD wiring, then lethal damage -> game-over
    overlay -> auto-respawn restores health and rebuilds structures.
-7. Level + difficulty-ramp test (`res://tests/LevelProgressionTest.tscn`) -
+8. Level + difficulty-ramp test (`res://tests/LevelProgressionTest.tscn`) -
    asserts (headless, no vision) that every difficulty scalar is monotonic in
    progress, the generator is seedable/deterministic, per-record difficulty
    params rise along the level, the clear lane is never violated, generated
    block count / height / debris launch-speed grow with progress, and a seeded
    full run of the real scene reaches the end without dying while structures
    stream ahead and despawn behind.
-8. Full-loop integration test (`res://tests/FullLoopTest.tscn`) - the node-6
+9. Full-loop integration test (`res://tests/FullLoopTest.tscn`) - the node-6
    contract, headless and vision-free: boots the real game scene into the start
    screen, starts the game, drives the player the full level to the win,
    restarts, shoots a structure to shatter it into rigid-body debris (asserting
    the pew/crash audio counters fire exactly once each), fires a debris block at
    the player to prove damage, and exits cleanly with code 0.
-9. Rendered smoke test (`res://tests/SmokeTest.tscn`) - loads the real game
+10. Rendered smoke test (`res://tests/SmokeTest.tscn`) - loads the real game
    scene, starts the run, drives the player, and verifies rendering via
    code-level pixel sampling (sky/ground/colour variation), using Xvfb when
    headless.
@@ -236,10 +247,11 @@ scripts/destruction/destructible_structure.gd  shatter to rigid-body debris
 tests/stress_test.gd          250-body Jolt stress test
 tests/destruction_test.gd     destruction-core automated test
 tests/weapon_damage_test.gd   weapon + damage loop automated test
+tests/weapon_determinism_test.gd  hitscan determinism test
 tests/game_flow_test.gd       HUD + death/restart integration test
 tests/level_progression_test.gd  level + difficulty-ramp automated test
 tests/audio_test.gd           audio wiring + size->sound mapping test
 tests/smoke_test.gd           rendered first-person smoke test
-run.sh / test.sh / smoke_test.sh   one-command entry points
+run.sh / run_tests.sh / smoke_test.sh   one-command entry points
 tools/ensure_godot.sh         locates or downloads the Godot binary
 ```

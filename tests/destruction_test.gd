@@ -11,7 +11,8 @@ extends Node
 ##     independently simulated RigidBody3D blocks (code-level, no vision)
 ##   * block sizes and shapes vary (>= 3 distinct dimensions, >= 2 shape types)
 ##   * every debris body has non-zero random linear and angular velocity
-##   * gravity is 9.8 and blocks fall
+##   * gravity is 9.8, and blocks accelerate downward under it
+##   * velocity damping decays a moving block's speed over time
 ##   * blocks bounce/roll then decay to rest (velocity below threshold), none
 ##     falling through the ground plane.
 
@@ -56,6 +57,9 @@ func _run() -> void:
 
 	_open_dump()
 	_build_ground()
+
+	await _check_downward_acceleration()
+	await _check_velocity_damping()
 
 	_structure = DESTRUCTIBLE_SCRIPT.new()
 	_structure.name = "Structure"
@@ -141,6 +145,57 @@ func _run() -> void:
 
 	_close_dump()
 	_finish()
+
+
+## Contract (2): downward acceleration -- a freely released block gains
+## downward speed over successive frames (gravity accelerates it downward).
+func _check_downward_acceleration() -> void:
+	var rb := _make_test_block(Vector3(0.0, 8.0, 0.0), Vector3(0.5, 0.5, 0.5))
+	rb.linear_velocity = Vector3.ZERO
+	rb.angular_velocity = Vector3.ZERO
+	add_child(rb)
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var v1: float = rb.linear_velocity.y
+	for i in range(10):
+		await get_tree().physics_frame
+	var v2: float = rb.linear_velocity.y
+	_check(v2 < v1, "downward acceleration: falling block's vy decreases (%.3f -> %.3f m/s)" % [v1, v2])
+	_check(v1 < 0.0 and v2 < 0.0, "falling block moves downward under gravity (vy < 0)")
+	rb.queue_free()
+
+
+## Contract (2): velocity damping -- a block with the same linear/angular damp
+## as debris (0.1 / 0.3) loses speed over time even with gravity disabled.
+func _check_velocity_damping() -> void:
+	var rb := _make_test_block(Vector3(0.0, 4.0, 0.0), Vector3(0.5, 0.5, 0.5))
+	rb.gravity_scale = 0.0
+	rb.linear_damp = 0.1     # matches debris blocks from _make_debris
+	rb.angular_damp = 0.3    # matches debris blocks from _make_debris
+	rb.linear_velocity = Vector3(6.0, 0.0, 0.0)
+	rb.angular_velocity = Vector3.ZERO
+	add_child(rb)
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var s1: float = rb.linear_velocity.length()
+	for i in range(30):
+		await get_tree().physics_frame
+	var s2: float = rb.linear_velocity.length()
+	_check(s2 < s1, "velocity damping: moving block slows over time (%.3f -> %.3f m/s)" % [s1, s2])
+	rb.queue_free()
+
+
+func _make_test_block(pos: Vector3, size: Vector3) -> RigidBody3D:
+	var rb := RigidBody3D.new()
+	rb.position = pos
+	rb.mass = 1.0
+	rb.continuous_cd = true
+	var shape := BoxShape3D.new()
+	shape.size = size
+	var col := CollisionShape3D.new()
+	col.shape = shape
+	rb.add_child(col)
+	return rb
 
 
 func _assess_variety(specs: Array) -> Dictionary:
